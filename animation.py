@@ -9,6 +9,8 @@
 import os, time
 import modules.scripts as scripts
 import gradio as gr
+
+import modules.sd_models
 from modules import processing, shared, sd_samplers, images
 from modules.processing import Processed, process_images
 from modules.sd_samplers import samplers
@@ -104,6 +106,12 @@ def make_gif(filepath, filename, fps, create_vid, create_bat):
     if create_vid:
         process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
 
+
+#        stdout, stderr = process.communicate()
+#        if process.returncode != 0:
+#            print(stderr)
+#            raise RuntimeError(stderr)
+
 def make_webm(filepath, filename, fps, create_vid, create_bat):
     in_filename = f"{str(filename)}_%05d.png"
     out_filename = f"{str(filename)}.webm"
@@ -128,6 +136,11 @@ def make_webm(filepath, filename, fps, create_vid, create_bat):
     if create_vid:
         process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
 
+
+#        stdout, stderr = process.communicate()
+#        if process.returncode != 0:
+#            print(stderr)
+#            raise RuntimeError(stderr)
 
 def make_mp4(filepath, filename, fps, create_vid, create_bat):
     in_filename = f"{str(filename)}_%05d.png"
@@ -156,6 +169,12 @@ def make_mp4(filepath, filename, fps, create_vid, create_bat):
 
     if create_vid:
         process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+
+
+#        stdout, stderr = process.communicate()
+#        if process.returncode != 0:
+#            print(stderr)
+#            raise RuntimeError(stderr)
 
 class Script(scripts.Script):
 
@@ -192,17 +211,24 @@ class Script(scripts.Script):
             zoom_factor = gr.Textbox(label="Zoom Factor (scale/s)", lines=1, value="1.0")
             x_shift = gr.Textbox(label="X Pixel Shift (pixels/s)", lines=1, value="0")
             y_shift = gr.Textbox(label="Y Pixel Shift (pixels/s)", lines=1, value="0")
+
         i3 = gr.HTML("<p style=\"margin-bottom:0.75em\">Prompt Template, applied to each keyframe below</p>")
         tmpl_pos = gr.Textbox(label="Positive Prompts", lines=1, value="")
         tmpl_neg = gr.Textbox(label="Negative Prompts", lines=1, value="")
-
+        checkpoints = []
+        for checkpoint in modules.sd_models.checkpoints_list:
+            checkpoints.append(checkpoint.replace(".ckpt", ""))
         i4 = gr.HTML(
-            "<p style=\"margin-bottom:0.75em\">Keyframe Format: <br>Time (s) | Desnoise | Zoom (/s) | X Shift (pix/s) | Y shift (pix/s) | Positive Prompts | Negative Prompts | Seed</p>")
-        prompts = gr.Textbox(label="Keyframes:", lines=5, value="")
-        return [i1, i2, i3, i4, totaltime, fps, vid_gif, vid_mp4, vid_webm, zoom_factor, tmpl_pos, tmpl_neg, prompts,
-                denoising_strength, x_shift, y_shift, noise_decay, add_noise, noise_strength, decay_rate]
+            "<p style=\"margin-bottom:0.75em\">Keyframe Format: <br>Time (s) | Desnoise | Zoom (/s) | X Shift (pix/s) | Y shift (pix/s) | Positive Prompts | Negative Prompts | Seed | Color Correction | Model</p>")
+        i5 = gr.HTML(
+            "<p style=\"margin-bottom:0.75em\">Keyframe Format: <br>0 | .55 | 1.0 | 0 | 0 | Positive Prompts | | | True | %s </p> <br> %s" % (
+            modules.sd_models.select_checkpoint().model_name, "<br>".join(checkpoints)))
 
-    def run(self, p, i1, i2, i3, i4, totaltime, fps, vid_gif, vid_mp4, vid_webm, zoom_factor, tmpl_pos, tmpl_neg,
+        prompts = gr.Textbox(label="Keyframes:", lines=5, value="")
+        return [i1, i2, i3, i4, i5, totaltime, fps, vid_gif, vid_mp4, vid_webm, zoom_factor, tmpl_pos, tmpl_neg,
+                prompts, denoising_strength, x_shift, y_shift, noise_decay, add_noise, noise_strength, decay_rate]
+
+    def run(self, p, i1, i2, i3, i4, i5, totaltime, fps, vid_gif, vid_mp4, vid_webm, zoom_factor, tmpl_pos, tmpl_neg,
             prompts, denoising_strength, x_shift, y_shift, noise_decay, add_noise, noise_strength, decay_rate):
 
         outfilename = time.strftime('%Y%m%d%H%M%S')
@@ -222,7 +248,7 @@ class Script(scripts.Script):
             tmpframe = int(float(lineparts[0]) * int(fps))
             myprompts[tmpframe] = (
             lineparts[1].strip(), lineparts[2].strip(), lineparts[3].strip(), lineparts[4].strip(),
-            lineparts[5].strip(), lineparts[6].strip(), lineparts[7].strip())
+            lineparts[5].strip(), lineparts[6].strip(), lineparts[7].strip(), lineparts[8].strip(), lineparts[9])
 
         processing.fix_seed(p)
         batch_count = p.n_iter
@@ -294,6 +320,8 @@ class Script(scripts.Script):
         x_shift_perframe = float(x_shift) / float(fps)
         y_shift_perframe = float(y_shift) / float(fps)
 
+        color_correction = True
+
         for i in range(int(loops)):
 
             if state.interrupted:
@@ -321,13 +349,24 @@ class Script(scripts.Script):
                     p.seed = int(myprompts[i][6])
                     processing.fix_seed(p)
 
+                if myprompts[i][7] == "True":
+                    color_correction = True
+                else:
+                    color_correction = False
+
+                info = modules.sd_models.get_closet_checkpoint_match(myprompts[i][8].strip() + ".ckpt")
+                if info is None:
+                    raise RuntimeError(f"Unknown checkpoint: {myprompts[i][8]}")
+                modules.sd_models.reload_model_weights(shared.sd_model, info)
+
             elif noise_decay:
                 p.denoising_strength = p.denoising_strength * decay_mult
 
             p.n_iter = 1
             p.batch_size = 1
             p.do_not_save_grid = True
-            p.color_corrections = initial_color_corrections
+            if color_correction:
+                p.color_corrections = initial_color_corrections
 
             state.job = f"Iteration {i + 1}/{int(loops)}"
 
@@ -369,6 +408,7 @@ class Script(scripts.Script):
 
         # display(all_images, initial_seed, initial_info)
         # print("Video Rendered.\r\n")
+
         processed = Processed(p, all_images, initial_seed, initial_info)
 
         return processed
