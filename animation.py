@@ -298,32 +298,51 @@ class Script(scripts.Script):
         x_shift_perframe = float(x_shift) / float(fps)
         y_shift_perframe = float(y_shift) / float(fps)
 
+
+        current_prompt = 0
+        processed = None
         for i in range(int(loops)):
- 
+            #p.sampler = None
             if state.interrupted:
                 #Interrupt button pressed in WebUI
                 break
             
             #Process Keyframes
-            if i in myprompts:
-                # Desnoise | Zoom | X Shift | Y shift | Positive Prompts | Negative Prompts | Seed
-                print(f"\r\nKeyframe at {i}: {myprompts[i]}\r\n")
-                p.denoising_strength =  float(myprompts[i][0])
-                zoom_factor =           float(myprompts[i][1]) ** (1/float(fps))
-                x_shift =               float(myprompts[i][2])
-                y_shift =               float(myprompts[i][3])
+            keyframes = list(myprompts.keys())
+            if current_prompt < len(myprompts):
+                if i == keyframes[current_prompt]:
+                    if processed != None:
+                        init_img = processed.images[0]
+                        p.init_images = [zoom_at2(init_img, int(x_shift_cumulitive), int(y_shift_cumulitive), zoom_factor)]
+                        if add_noise:
+                            #print("Adding Noise!!")
+                            p.init_images[0] = addnoise(p.init_images[0], noise_strength)
+                    
+                    current_prompt += 1
+                    # Desnoise | Zoom | X Shift | Y shift | Positive Prompts | Negative Prompts | Seed
+                    print(f"\r\nKeyframe at {i}: {myprompts[i]}\r\n")
+                    p.denoising_strength =  float(myprompts[i][0])
+                    zoom_factor =           float(myprompts[i][1]) ** (1/float(fps))
+                    x_shift =               float(myprompts[i][2])
+                    y_shift =               float(myprompts[i][3])
 
-                x_shift_perframe = x_shift / int(fps)
-                y_shift_perframe = y_shift / int(fps)
-                
-                #If not prompt, continue previous prompts
-                if len(myprompts[i][4]) > 0: p.prompt =          tmpl_pos + ", " + myprompts[i][4]
-                if len(myprompts[i][5]) > 0: p.negative_prompt = tmpl_neg + ", " + myprompts[i][5]
-                
-                #If seed is blank, keep it the same as it was. Otherwise, set it. -1 will result in random seed.
-                if len(myprompts[i][6]) != 0:
-                    p.seed = int(myprompts[i][6])
-                    processing.fix_seed(p)
+                    x_shift_perframe = x_shift / int(fps)
+                    y_shift_perframe = y_shift / int(fps)
+                    
+                    #If not prompt, continue previous prompts
+                    if len(myprompts[i][4]) > 0: p.prompt =          tmpl_pos + ", " + myprompts[i][4]
+                    if len(myprompts[i][5]) > 0: p.negative_prompt = tmpl_neg + ", " + myprompts[i][5]
+                    
+                    #If seed is blank, keep it the same as it was. Otherwise, set it. -1 will result in random seed.
+                    if len(myprompts[i][6]) != 0:
+                        p.seed = int(myprompts[i][6])
+                        processing.fix_seed(p)
+                else:
+                    total_frames = keyframes[current_prompt] - keyframes[current_prompt-1]
+                    current_frame = i - keyframes[current_prompt-1]
+                    inter_prompt = self.get_interpolate_prompt(myprompts[keyframes[current_prompt-1]], myprompts[keyframes[current_prompt]], current_frame, total_frames)
+                    if len(inter_prompt[4]) > 0: p.prompt = tmpl_pos + ", " + inter_prompt[4]
+                    p.denoising_strength = inter_prompt[0]
                 
             elif noise_decay:
                 p.denoising_strength = p.denoising_strength * decay_mult
@@ -335,6 +354,7 @@ class Script(scripts.Script):
  
             state.job = f"Iteration {i + 1}/{int(loops)}"
  
+            print(f"prompt: {p.prompt}, denoise: {p.denoising_strength}")
             processed = processing.process_images(p)
  
             if initial_seed is None:
@@ -347,25 +367,23 @@ class Script(scripts.Script):
             y_shift_cumulitive = y_shift_cumulitive + y_shift_perframe
 
             #Manipulate image to be passed to next iteration
-            init_img = processed.images[0]
-            p.init_images = [zoom_at2(init_img, int(x_shift_cumulitive), int(y_shift_cumulitive), zoom_factor)]
+           
+            
             #p.init_images = [opencvtransform(init_img, 0, int(x_shift_cumulitive),  int(y_shift_cumulitive), zoom_factor, False)]
-            if add_noise:
-                #print("Adding Noise!!")
-                p.init_images[0] = addnoise(p.init_images[0], noise_strength)
+           
             
             #Subtract the integer portion we just shifted.
             x_shift_cumulitive = x_xhift_cumulitive - int(x_xhift_cumulitive)
             y_shift_cumulitive = y_shift_cumulitive - int(y_shift_cumulitive)
 
-            p.seed = processed.seed + 1
+            p.seed = processed.seed
             
             #Save every seconds worth of frames to the output set displayed in UI
             if (i % int(fps) == 0):
-                all_images.append(init_img)
+                all_images.append(processed.images[0])
              
             #Save current image to folder manually, with specific name we can iterate over.
-            init_img.save(os.path.join(outpath, f"{outfilename}_{i:05}.png"))
+            processed.images[0].save(os.path.join(outpath, f"{outfilename}_{i:05}.png"))
  
         #If not interrupted, make requested movies. Otherise the bat files exist.
         make_gif(outpath, outfilename, int(fps), vid_gif, False)# & (not state.interrupted), False)
@@ -379,3 +397,21 @@ class Script(scripts.Script):
         processed = Processed(p, all_images, initial_seed, initial_info)
  
         return processed
+
+    def get_interpolate_prompt(self, prompt1, prompt2, frame, total_frame):       
+        factor = 1.0 * frame / total_frame
+        pos_prompt1 = prompt1[4]
+        pos_prompt2 = prompt2[4]
+        
+        d_strength1 = float(prompt1[0])
+        d_strength2 = float(prompt2[0])
+        
+        if pos_prompt1 == pos_prompt2:
+            d_strength1 = 0.15
+            pos_prompt = pos_prompt1
+        else:
+            pos_prompt = f"{pos_prompt1} :{1 - factor} AND {pos_prompt2} :{factor}"
+            
+        d_strength = d_strength1 + (d_strength2 - d_strength1) * factor
+        inter_prompt = (d_strength, prompt1[1], prompt1[2], prompt1[3], pos_prompt, prompt1[5], prompt1[6])
+        return inter_prompt
