@@ -330,7 +330,7 @@ class Script(scripts.Script):
                     y_shift_perframe = y_shift / int(fps)
                     
                     #If not prompt, continue previous prompts
-                    if len(myprompts[i][4]) > 0: p.prompt =          tmpl_pos + ", " + myprompts[i][4]
+                    if len(myprompts[i][4]) > 0: p.prompt =          tmpl_pos + " AND " + myprompts[i][4]
                     if len(myprompts[i][5]) > 0: p.negative_prompt = tmpl_neg + ", " + myprompts[i][5]
                     
                     #If seed is blank, keep it the same as it was. Otherwise, set it. -1 will result in random seed.
@@ -341,7 +341,7 @@ class Script(scripts.Script):
                     total_frames = keyframes[current_prompt] - keyframes[current_prompt-1]
                     current_frame = i - keyframes[current_prompt-1]
                     inter_prompt = self.get_interpolate_prompt(myprompts[keyframes[current_prompt-1]], myprompts[keyframes[current_prompt]], current_frame, total_frames)
-                    if len(inter_prompt[4]) > 0: p.prompt = tmpl_pos + ", " + inter_prompt[4]
+                    if len(inter_prompt[4]) > 0: p.prompt = tmpl_pos + " AND " + inter_prompt[4]
                     p.denoising_strength = inter_prompt[0]
                 
             elif noise_decay:
